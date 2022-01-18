@@ -2,7 +2,7 @@
 #include <map>
 #include <chrono>
 #include <vector>
-
+#include <cstring>
 
 struct MeasureScope {
     MeasureScope(const std::string& name) :
@@ -20,22 +20,23 @@ struct MeasureScope {
     std::string name;
     std::chrono::time_point<std::chrono::high_resolution_clock> start;
 };
-#define NUM_ELEMENTS (100000000)
+
+#define NUM_ELEMENTS (10*1000*1000)
 typedef int64_t T;
 static T data[NUM_ELEMENTS];
 
 void generateRandomData(T *data, size_t num_elements)
 {
-    for (int i = 0; i < NUM_ELEMENTS; i ++){
-        //data[i] = NUM_ELEMENTS - (i+1);
+    for (int i = 0; i < num_elements; i ++){
         data[i] = rand();
+        //data[i] = NUM_ELEMENTS - i;
     }
 }
 
-void test_map(const T *data, size_t num_elements, size_t threshold, T *results)
+template <typename T>void test_map(const T *data, size_t num_elements, size_t threshold, uint64_t *results)
 {
     std::multimap<T, size_t> mapItems;
-    for ( size_t i = 0; i < NUM_ELEMENTS; i ++)
+    for ( size_t i = 0; i < num_elements; i ++)
     {
         mapItems.insert({data[i], i});
 
@@ -49,40 +50,46 @@ void test_map(const T *data, size_t num_elements, size_t threshold, T *results)
     }
 }
 
-int cmpfunc64 (const void * a, const void * b) {return *static_cast<const T*>(a) - *static_cast<const T*>(b);}
+template <typename T> struct SortableItem
+{
+    uint64_t a;
+    T b;
+    bool operator < (const SortableItem& other) const    {return (this->a < other.a);}
+};
 
-void test_qsort(const T *data, size_t num_elements, size_t threshold, T *results)
+void test_sort(const T *data, size_t num_elements, size_t threshold, uint64_t *results)
 {
     threshold = std::min(threshold, num_elements);
-    T *dataIndexed = (T*)malloc(sizeof(T) * num_elements * 2);
+    SortableItem <T>*dataIndexed = new SortableItem<T>[num_elements];
     for (size_t i = 0; i < num_elements; i ++)
     {
-        dataIndexed[i*2] = data[i];
-        dataIndexed[i*2+1] = i;
+        dataIndexed[i].a = data[i];
+        dataIndexed[i].b = i;
     }
 
-    qsort(dataIndexed, num_elements, sizeof(T)*2, cmpfunc64);
+    std::sort(dataIndexed, dataIndexed + num_elements);
 
 
     for (size_t i = 0; i < threshold; i ++){
-        results[i] = dataIndexed[i*2+1];
+        results[i] = dataIndexed[i].b;
     }
 
-    ::free(dataIndexed);
+    delete []dataIndexed;
 }
 
-void test_custom1(const T *data, size_t num_elements, size_t threshold, T *results)
+void test_custom1(const T *data, size_t num_elements, size_t threshold, uint64_t *results)
 {
     threshold = std::min(num_elements, threshold);
     int current_max = 0;
     int cur;
-    for ( size_t i = 0; i < NUM_ELEMENTS; i ++) {
+    int z;
+    for ( size_t i = 0; i < num_elements; i ++) {
         //We starting from the highest values and we look for the immediately lower than the given one
         for (cur = current_max; cur > 0 && (data[i] < data[results[cur - 1]]); cur--);
 
         if (cur < threshold) {
             //Move all the higher values 1 position to the right
-            for (int z = current_max -1; z >= cur; z--)
+            for (z = current_max -1; z >= cur; z--)
                 results[z + 1] = results[z];
             current_max = std::min((int)threshold, current_max+1);
 
@@ -92,14 +99,29 @@ void test_custom1(const T *data, size_t num_elements, size_t threshold, T *resul
     }
 }
 
-void test_nth(const T *data, size_t num_elements, size_t threshold, T *results)
+template <typename T> void GetFirstElements(T *data, size_t num_elements, size_t threshold, uint64_t *results)
 {
-    std::vector<T> v(data, data + num_elements);
-    auto m = v.begin() + threshold;
-    std::nth_element(v.begin(), m, v.end());
-    std::sort(v.begin(), m);
-    for (int i = 0; i < threshold; i ++)
-       results[i] = v[i];
+    threshold = std::min(threshold, num_elements);
+
+    SortableItem<T> *dataIndexed = new SortableItem<T>[num_elements];
+    for (size_t i = 0; i < num_elements; i++) {
+        dataIndexed[i].a = data[i];
+        dataIndexed[i].b = i;
+    }
+
+    std::nth_element(dataIndexed, dataIndexed + threshold, dataIndexed + num_elements);
+    std::sort(dataIndexed, dataIndexed + threshold);
+
+    for (size_t i = 0; i < threshold; i++) {
+        results[i] = dataIndexed[i].b;
+    }
+
+    delete []dataIndexed;
+}
+
+
+void test_nth(T *data, size_t num_elements, size_t threshold, uint64_t *results) {
+    GetFirstElements(data, num_elements, threshold, results);
 }
 
 int main(int argc, char *argv[]) {
@@ -109,7 +131,7 @@ int main(int argc, char *argv[]) {
     std::cout << "done" << std::endl;
 
     size_t threshold = 10;
-    T results[threshold];
+    uint64_t results[threshold];
     std::cout << "Getting first " << threshold << " elements ..." << std::endl;
 
     for (size_t i = 0; i < threshold; i ++)    {results[i] = 0;}
@@ -120,14 +142,16 @@ int main(int argc, char *argv[]) {
         for (size_t i = 0; i < std::min(threshold,(size_t)5); i ++)    {        std::cout << data[results[i]] << " ";    }
     }
 
+    std::memset(results, 0, sizeof(results));
     for (size_t i = 0; i < threshold; i ++)    {results[i] = 0;}
     {
-        MeasureScope measure("test_qsort");
-        test_qsort(data, NUM_ELEMENTS, threshold, results);
+        MeasureScope measure("test_sort");
+        test_sort(data, NUM_ELEMENTS, threshold, results);
         std::cout << "done" << std::endl;
         for (size_t i = 0; i < std::min(threshold,(size_t)5); i ++)    {        std::cout << data[results[i]] << " ";    }
     }
 
+    std::memset(results, 0xFF, sizeof(results));
     for (size_t i = 0; i < threshold; i ++)    {results[i] = 0;}
     {
         MeasureScope measure("test_custom1");
@@ -136,12 +160,13 @@ int main(int argc, char *argv[]) {
         for (size_t i = 0; i < std::min(threshold,(size_t)5); i ++)    {        std::cout << data[results[i]] << " ";    }
     }
 
+    std::memset(results, 0, sizeof(results));
     for (size_t i = 0; i < threshold; i ++)    {results[i] = 0;}
     {
         MeasureScope measure("test_nth");
         test_nth(data, NUM_ELEMENTS, threshold, results);
         std::cout << "done" << std::endl;
-        for (size_t i = 0; i < std::min(threshold,(size_t)5); i ++)    {        std::cout << results[i] << " ";  }
+        for (size_t i = 0; i < std::min(threshold,(size_t)5); i ++)    {        std::cout << data[results[i]] << " ";  }
     }
 
     std::cout << std::endl;
